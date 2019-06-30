@@ -1,0 +1,201 @@
+
+--------------------------------------------------------------------------------
+
+Table of Contents:
+   1. Data model
+   2. Preprocess
+   3. Integration
+   4. Postprocess
+
+-------------------------------------------------------------------------------
+ 1. Data model:
+-------------------------------------------------------------------------------
+Numpy arrays are used wherever possible. It is possible to define a shape
+of numpy arrays for each element group since they contain only elements
+of same type.
+
+Currently best solution for the most general shape of numpy arrays used is
+(integration points, elements, ...) for each element group.
+
+These kind of arrays are easy to operate with using numpys matmul(@) operator.
+
+Throughout the whole npyfem, the similar structure occures with the same idea.
+
+In IntegrationFacade:
+  dNxyz:
+    (intpoints, elements, 3, local dofs) has x y and z components (in 3D),dim=3
+    Contains shape function derivatives wrt. xyz in each element evaluated
+    at integration points.
+
+  N:
+    (intpoints, elements, 1, local dofs) scalar field, dim = 1
+    Contains shape functions in each element evaluated at integration points.
+
+  Jac:
+    (intpoints, elements, dim, dim)
+    Contains jacobian matrices in each element evaluated at integration points
+
+  xyz:
+    (intpoints, elements, nodes, dim)
+    Contains xyz coordinates of integration points
+
+PLAN:
+In post processing we have several shapes. The main shape in which the results
+are handled for each elementgroup is (time, points, elements, (i,j,k))
+
+Time axis corresponds to timestep. Points axis corresponds to for example
+integration points or center points of element where the field is defined,
+but other points are also possible. Elements correspond to elements in
+the element group and from that on, the axes represent the field. For example
+scalar field is 3D array: (t,p,e), 2D vector field is (t,p,e,xy) etc..
+
+
+--------------------------------------------------------------------------------
+ 2. Preprosessing:
+--------------------------------------------------------------------------------
+
+Mesh is read using meshio or other tools. NPMesh class is used to contain the
+mesh and hold the mesh information.
+
+ElementGroup is a base class for element classes. Element classes model
+a part of mesh which contain only elements of the same type. Each physical
+line/surface/volume will be divided in objects derived from ElementGroup which
+consist of elements of the same type.
+
+An example: A 2D mesh is divided into two physical surfaces identified with
+numbers 24 and 42. Both physical surfaces contain triangle elements and
+quadrangle elements.
+
+Hence the structure inside NPMesh will be the following.
+
+List of elementgroups in creation order (determined during the mesh is read)
+NPMesh.elementgroups => [<tris in 24>, <quads in 24>, <tris in 42>, <quads in 42>]
+
+Dict of elementgroups structured as {physicalid: {elemtype: elementgroup,..},..}
+NPMesh.physicals => {24: {'triangle': <tris in 24>, 'quad': <quads in 24>},
+                     42: {'triangle': <tris in 24>, 'quad': <quads in 24>}}
+
+--------------------------------------------------------------------------------
+ 3. Integration:
+--------------------------------------------------------------------------------
+
+Integrator class is responsible for integrating expressions over the mesh domain.
+
+Integrator holds an IntegratorCache which stores all necessary intermediate
+values used in integration to avoid recalculation, for example jacobians
+and determinants.
+
+Integrator.integrate(phys, expr) method is used to do the actual integration.
+
+Parameter phys is a list of physical domain numbers. Integrator will attempt to
+integrate expr over those physical domains.
+
+Parameter expr is a function of type (IntegrationFacade fc) -> np.array().
+This is given by the user.
+
+IntegrationFacade contains at least the following parameters which can be
+accessed during the computation of the result:
+  physical_domain = Currant physical domain number
+  dNxyz = shape function derivatives wrt. original coordinates
+  N = shape functions in original coordinates
+  Jac = jacobian matrices
+  xyz = coordinates of integration points
+
+The shape of these is specified in Data model section.
+
+The output is a numpy array consisting of the local stiffness matrices
+which has the following dimensions:
+(integration points, elements, local dofs, local dofs)
+
+--------------------------------------------------------------------------------
+ 4. Post processing
+--------------------------------------------------------------------------------
+
+This is a preliminary plan/proposal:
+
+Post processing is done similarly to integration. PostProcesser class offers a
+method process which takes a list of physical domains and a function from
+the user, the type of which is (PostProcessingFacade pf) -> np.array().
+
+This function is then executed for each part of the solution in different
+elementgroups on the domain list.
+
+The data model for dealing with fields is as follows:
+
+Fields associated with this mesh are of following types
+
+node_fieldn = namedtuple('NodeField'
+  msh = mesh object,
+  type = TensorType object
+  time = nparray (timestep values), None if static,
+  nodedata = np.array(nparray(time, nodes,(i,j,k)))),
+)
+
+Node field is always global.
+
+element_fieldn = namedtuple('ElementField',
+  msh = mesh object,
+  type = TensorType object
+  time = nparray (timestep values), None if static,
+  elementdata = [(elemgroup, physdom, evalp, nparray(time, points, elements, (i,j,k))],
+)
+
+element_field_cp = namedtuple('ElementFieldCenter',
+  msh = mesh object,
+  type = TensorType object
+  time = nparray (timestep values), None if static,
+  elementcenterdata = [(elemgroup, physdom, nparray(time, elements, (i,j,k)))],
+)
+
+Element field can be restricted to physical domain (e.g. copper in air, and you
+want to calculate eddy currents in copper, but not in air).
+
+In elements tuple field 'evalp' is np.array of the REFERENCE coordinates of
+the points in which the field is evaluated. evalp.shape[0] == points, i.e.
+amount of points should match the points axes length.
+
+Axes (i,j,k) are for representing scalar, vector and tensor values.
+Scalar fields can be represented without any additional axes.
+
+Postprocess module offers tools with which you can apply any operations you are
+able to define to one or multiple fields (i.e. calculate dot products,
+time derivatives and spatial derivatives).
+
+--------------------------------------------------------------------------------
+Hypothetical example in magnetodynamic 2D case (pseudopython):
+--------------------------------------------------------------------------------
+from npyfem.fields import nodefield, to_elements
+from npyfem.postprocess import apply_operation
+from npyfem.mesh import center_points
+from npyfem.iotools import export_vtk
+
+# center_points(eg) will return center points for element group eg (ref.coords.)
+
+def calcEfromA(...):
+  # this function calculates E from vector potential
+  return ...
+
+def jouleheat(...):
+  # this function calculates sigma * E dot E
+  return ...
+
+msh = mesh object
+AIR = 1 physical number
+CU = 2 physical number
+a = solution of magnetic vector potential, nparray of shape (t, nodes)
+t = timestep values, nparray of shape (t)
+
+Aglob = nodefield(msh, a, t)
+
+# convert to element form, restrict to copper only
+Acu = to_elements(Aglob, center_points, [CU])
+
+# returns E in center points (as Acu was also in center points)
+Ecu = apply_operation(Acu, calcEfromA)
+
+# returns power density
+Heat = apply_operation(Ecu, jouleheat)
+
+# export to for example paraview
+export_vtk('mysolution', to_element_centers(Heat))
+--------------------------------------------------------------------------------

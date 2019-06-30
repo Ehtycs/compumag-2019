@@ -1,0 +1,28 @@
+TODO, updated 23.2.2018
+
+
+MAIN FOCUS:
+
+Import/export module iotools.
+  x api specifications
+  - finish and connect gmsh_parser to iotools package
+  - write vtk import/export and connect to package
+  - write unit tests
+
+Post processing tools
+  - define some specifications for behaviour and data model
+  - write a class which takes user defined post processing
+    functions similarly as integrator
+  - write unit tests
+
+MISC:
+
+Improve the setting of boundary conditions
+  - Remove bottlenecks from Dirichlet boundary conditions
+    * Basically: can the boundary conditions be taken into account
+      earlier during the processing.
+  - Add more general way to enforce different kinds of
+    boundary conditions/integral conditions
+
+Write unit tests
+  - It would be nice to have some test coverage. Now we have almost none :D
